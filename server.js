@@ -495,6 +495,7 @@ if (/[<>]/.test(mongodbUri) || /@<cluster>|<username>|<password>|<database>/.tes
 }
 mongoose.connect(mongodbUri, { serverSelectionTimeoutMS: 10000, maxPoolSize: 10, family: 4 })
   .then(() => {
+    console.log('MongoDB connected successfully.');
     const server = app.listen(PORT, () => console.log(`Deeya Invest running at http://localhost:${PORT}`));
     server.on('error', error => {
       if (error.code === 'EADDRINUSE') {

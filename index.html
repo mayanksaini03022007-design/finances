@@ -440,7 +440,7 @@ let editingCustomerId = '';
 let passwordResetToken = '';
 // When this file is opened directly (file://), relative URLs point at the
 // filesystem instead of the Express API. Use the local API in that case.
-const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:3000' : '';
+const API_BASE = window.location.protocol === 'file:' ? 'real-time-project-pv2ooy9xd-web-develop3.vercel.app' : '';
 const apiToken = () => sessionStorage.getItem('authToken');
 function escapeHtml(value){
  return String(value ?? '').replace(/[&<>'"]/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','\"':'&quot;'}[character]));
