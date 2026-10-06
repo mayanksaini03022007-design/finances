@@ -61,7 +61,7 @@ button{border:0;border-radius:8px;padding:14px 20px;margin-top:18px;font-weight:
 <section id="home" class="screen active">
 <div class="container">
 <div class="card center">
-  <h1><img class="screen-logo" src="DFS.jpg" alt="Deeya Finances Services logo">
+  <h1><img class="screen-logo" src="/DFS.jpg" alt="Deeya Finances Services logo">
 Deeya Finances</h1>
 <p>Employee & Customer Management System</p>
 <button class="primary full" onclick="show('register')">👨‍💼 Create Employee Account</button>
@@ -106,8 +106,8 @@ Deeya Finances</h1>
 <div class="container"><div class="card center">
 <h2>📱 OTP Verification</h2><p>A one-time code has been sent to your registered email address.</p>
 <label>Enter OTP</label><input id="otpInput" maxlength="6">
-<button class="primary full" onclick="verify()">Verify OTP</button>
-<button class="secondary full" onclick="resendOtp()">Resend OTP</button>
+<button id="verifyOtpButton" class="primary full" onclick="verify()" disabled>Verify OTP</button>
+<button id="resendOtpButton" class="secondary full" onclick="resendOtp()">Resend OTP</button>
 <button class="secondary full" onclick="show('register')">Back</button>
 </div></div>
 </section>
@@ -136,9 +136,7 @@ Deeya Finances</h1>
 <section id="adminDash" class="screen">
 <div class="header"><div class="container"><h2>🔐 Admin Dashboard</h2><p>Employee Management</p></div></div>
 <div class="container"><div class="card">
-<h3>Employee Request</h3><div id="empInfo"></div>
-<button class="success" onclick="approve()">✅ Approve</button>
-<button class="danger" onclick="disapprove()">❌ Disapprove Employee</button>
+<h3>Employee Request</h3><p id="adminActionStatus" class="error" aria-live="polite"></p><div id="empInfo"></div>
 <button class="secondary full" onclick="show('home')">Logout</button>
 </div></div>
 <div class="container"><div class="card">
@@ -199,8 +197,6 @@ onclick="openAdd()">➕ Add Customer</button>
 <button class="primary" 
 onclick="openList()">👥 Customer List</button>
 <button class="secondary"
- onclick="openPendingFiles()">📂 Pending Files</button>
-<button class="secondary"
  onclick="openAdminFiles()">📁 My uploaded</button>
 <button class="secondary"
  onclick="openHistory()">📜 History</button>
@@ -246,12 +242,11 @@ onclick="openList()">👥 Customer List</button>
 <textarea id="profileAddress" placeholder="Enter complete address"></textarea>
 <div class="doc">
 <b>🪪 Aadhaar Card</b>
-<label for="profileAadhaar">Aadhaar Front *</label>
-<input id="profileAadhaar" type="file" accept="image/*,.pdf" capture="environment">
-<label for="profileAadhaarBack">Aadhaar Back *</label>
-<input id="profileAadhaarBack" type="file" accept="image/*,.pdf" capture="environment">
 <div id="profileAadhaarStatus" class="status"></div>
-<div id="profileAadhaarBackStatus" class="status"></div>
+<img id="profileAadhaarPreview" class="admin-preview" hidden>
+<img id="profileAadhaarBackPreview" class="admin-preview" hidden>
+<label for="profileAadhaar">Aadhaar Front</label><input id="profileAadhaar" type="file" accept="image/*">
+<label for="profileAadhaarBack">Aadhaar Back</label><input id="profileAadhaarBack" type="file" accept="image/*">
 </div>
 <button class="success full" onclick="saveProfile()">Save Profile</button>
 <button class="primary full" onclick="openContact()">Contact Us</button>
@@ -396,643 +391,717 @@ onclick="openList()">👥 Customer List</button>
 <div><label>Address</label><input id="r2Address"></div>
 </div>
 
-<button class="success full" onclick="saveCustomer()">✅ Submit Complete Customer File</button>
+<button id="saveCustomerButton" class="success full" onclick="saveCustomer()">✅ Submit Complete Customer File</button>
 <button class="secondary full" onclick="openDash()">← Back to Dashboard</button>
 <p id="saveMsg" class="status"></p>
-</div></div>
-</section>
-
-<!-- CUSTOMER LIST -->
-<section id="customerList" class="screen">
-<div class="header"><div class="container"><h2>👥 Customer List</h2></div></div>
-<div class="container"><div class="card">
-<div id="list"></div>
-<button class="secondary full" onclick="openDash()">← Back</button>
-</div></div>
-</section>
-<!-- UPLOADED FILES-->
-<section id="uploadedFiles" class="screen">
-    div class="header"><div class="container">
-        <h2>📁 Uploaded Customer Files</h2>
-        <p>customer documents</p>
-    </div>
-</div>
-<div class="container">
-    <div class="card">
-    <div id="uploadedFilesList"></div>
-    <button class="secondary full" onclick="openDash()">← Back</button>
+</div></section>
 
 <script>
-function show(id){
- document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));
- const el=document.getElementById(id);
- if(el){
-  el.classList.add('active');
-  sessionStorage.setItem('activeScreen',id);
- }
- window.scrollTo(0,0);
-}
-
-let pendingEmail = sessionStorage.getItem('pendingRegistrationEmail') || '';
 let currentEmployee = null;
-let customerCache = [];
-let editingCustomerId = '';
+let editingCustomerId = null;
+const passwordResetStorageKey = 'deeya-invest-password-reset';
 let passwordResetToken = '';
-// When this file is opened directly (file://), relative URLs point at the
-// filesystem instead of the Express API. Use the local API in that case.
-const API_BASE = window.location.protocol === 'file:' ? 'real-time-project-pv2ooy9xd-web-develop3.vercel.app' : '';
-const apiToken = () => sessionStorage.getItem('authToken');
-function escapeHtml(value){
- return String(value ?? '').replace(/[&<>'"]/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','\"':'&quot;'}[character]));
+let activeAdminFolder = '';
+
+function savePasswordResetState(step, resetToken = ''){
+    const employeeId = document.getElementById('eId').value.trim()
+    sessionStorage.setItem(passwordResetStorageKey, JSON.stringify({
+        employeeId,
+        step,
+        resetToken,
+        expiresAt: Date.now() + 10 * 60 * 1000
+    }))
 }
+
+function clearPasswordResetState(){
+    passwordResetToken = ''
+    sessionStorage.removeItem(passwordResetStorageKey)
+}
+
+function restorePasswordResetState(){
+    let state
+    try {
+        state = JSON.parse(sessionStorage.getItem(passwordResetStorageKey) || 'null')
+    } catch {
+        clearPasswordResetState()
+        return
+    }
+    if (!state || !state.employeeId || state.expiresAt <= Date.now()) {
+        clearPasswordResetState()
+        return
+    }
+    document.getElementById('eId').value = state.employeeId
+    show('employeeLogin')
+    const otpPanel = document.getElementById('resetOtpPanel')
+    const passwordPanel = document.getElementById('newPasswordPanel')
+    const status = document.getElementById('resetPasswordStatus')
+    if (state.step === 'newPassword' && state.resetToken) {
+        passwordResetToken = state.resetToken
+        otpPanel.hidden = true
+        passwordPanel.hidden = false
+        status.innerText = 'OTP already verified. Choose a new password to continue.'
+    } else {
+        otpPanel.hidden = false
+        passwordPanel.hidden = true
+        status.innerText = 'Password-reset OTP is pending. Check the server terminal or ask the admin.'
+    }
+}
+
+function show(id){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'))
+    document.getElementById(id).classList.add('active')
+}
+
 async function api(url, options = {}) {
- const headers = options.body instanceof FormData ? {} : {'Content-Type':'application/json'};
- if(apiToken()) headers.Authorization = 'Bearer ' + apiToken();
- let response;
- try {
-  response = await fetch(API_BASE + url, {...options, headers: {...headers, ...(options.headers || {})}});
- } catch(error) {
-  throw new Error('Cannot reach the server. Start it with "npm start" and allow your IP in MongoDB Atlas Network Access.');
- }
- const payload = await response.json().catch(() => ({}));
- if(response.status===401){sessionStorage.removeItem('authToken');currentEmployee=null;}
- if(!response.ok) throw new Error(payload.message || 'Request failed.');
- return payload;
+    options.headers = {...options.headers};
+    if (!(options.body instanceof FormData)) options.headers['Content-Type'] = 'application/json';
+    if (localStorage.getItem('token')) {
+        options.headers['Authorization'] = 'Bearer ' + localStorage.getItem('token');
+    }
+    const res = await fetch(url, options);
+    if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message);
+    }
+    return res.json();
 }
 
-function logout(){
- sessionStorage.removeItem('authToken');
- currentEmployee=null;
- customerCache=[];
- show('home');
+async function register() {
+    const name = document.getElementById('rName').value;
+    const employeeId = document.getElementById('rId').value;
+    const mobile = document.getElementById('rMobile').value;
+    const email = document.getElementById('rEmail').value;
+    const password = document.getElementById('rPass').value;
+
+    try {
+        await api('/api/auth/register', {
+            method: 'POST',
+            body: JSON.stringify({ name, employeeId, mobile, email, password })
+        });
+        show('otp');
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
-function contactUs(){
- const name=document.getElementById('contactName').value.trim();
- const email=document.getElementById('contactEmail').value.trim();
- const message=document.getElementById('contactMessage').value.trim();
- const status=document.getElementById('contactStatus');
- if(!name || !email || !message){status.textContent='Please complete all fields.';status.className='error';return;}
- if(!/^\S+@\S+\.\S+$/.test(email)){status.textContent='Please enter a valid email address.';status.className='error';return;}
- status.textContent='Thank you. Your message has been received.';status.className='status';
- document.getElementById('contactMessage').value='';
-}
-
-function openContact(){
- document.getElementById('contactStatus').textContent='';
- show('contactUs');
-}
-
-function backFromContact(){
- show('employeeProfile');
-}
-
-async function register(){
- const emp={
-  name:document.getElementById('rName').value.trim(),
-  id:document.getElementById('rId').value.trim(),
-  mobile:document.getElementById('rMobile').value.trim(),
-  email:document.getElementById('rEmail').value.trim(),
-  password:document.getElementById('rPass').value,
-  approved:false
- };
- if(!emp.name||!emp.id||!emp.mobile||!emp.email||!emp.password){
-  alert('Please fill all employee details');
-  return;
- }
- if(!/^\d{10}$/.test(emp.mobile)){alert('Mobile number must be exactly 10 digits.');return;}
- try{
-  const result=await api('/api/auth/register',{method:'POST',body:JSON.stringify({name:emp.name,employeeId:emp.id,mobile:emp.mobile,email:emp.email,password:emp.password})});
-  pendingEmail=emp.email; sessionStorage.setItem('pendingRegistrationEmail',pendingEmail);
-  document.getElementById('otpInput').value=''; alert(result.message); show('otp');
- }catch(error){alert(error.message);}
+async function resendOtp() {
+    const email = document.getElementById('rEmail').value;
+    try {
+        const result = await api('/api/auth/resend-otp', {
+            method: 'POST',
+            body: JSON.stringify({ email })
+        });
+        alert(result.message);
+    } catch (error) {
+        alert(error.message);
+    }
 }
 
 async function verify(){
- if(!pendingEmail){alert('Please register first.');show('register');return;}
- try{
-  const result=await api('/api/auth/verify-otp',{method:'POST',body:JSON.stringify({email:pendingEmail,otp:document.getElementById('otpInput').value.trim()})});
-  sessionStorage.removeItem('pendingRegistrationEmail'); pendingEmail=''; alert(result.message); show('pending');
- }catch(error){alert(error.message);}
-}
-
-async function resendOtp(){
- if(!pendingEmail){alert('Please register first.');return;}
- try{const result=await api('/api/auth/resend-otp',{method:'POST',body:JSON.stringify({email:pendingEmail})});alert(result.message);}catch(error){alert(error.message);}
+    const email = document.getElementById('rEmail').value
+    const otp = document.getElementById('otpInput').value
+    try {
+        const res = await api('/api/auth/verify-otp', {
+            method: 'POST',
+            body: JSON.stringify({email, otp})
+        })
+        show('pending')
+    } catch (e) {
+        alert(e.message)
+    }
 }
 
 async function adminLogin(){
- const id=document.getElementById('aId').value.trim();
- const pass=document.getElementById('aPass').value;
- try{const result=await api('/api/auth/admin-login',{method:'POST',body:JSON.stringify({adminId:id,password:pass})});sessionStorage.setItem('authToken',result.token);await loadEmployee();show('adminDash');}
- catch(error){document.getElementById('aError').textContent=error.message;}
-}
-
-async function loadEmployee(){
- const box=document.getElementById('empInfo');
- try{const employees=await api('/api/admin/employees');const e=employees[0];if(!e){box.innerHTML='<p>No employee request found.</p>';return;}box.dataset.employeeId=e.id;box.innerHTML='<p><b>Name:</b> '+e.name+'</p><p><b>Employee ID:</b> '+e.employeeId+'</p><p><b>Mobile:</b> '+e.mobile+'</p><p><b>Email:</b> '+e.email+'</p><p><b>Status:</b> '+e.status+'</p>';}
- catch(error){box.innerHTML='<p class="error">'+error.message+'</p>';}
-}
-
-function adminFileLink(label, value){
- return uploadedFileMarkup(label,value);
-}
-
-function uploadedFileMarkup(label, value){
- label=escapeHtml(label);
- if(!value || value==='Not uploaded') return '<p><b>'+label+':</b> Not uploaded</p>';
- if(!String(value).startsWith('/uploads/')) return '<p><b>'+label+':</b> '+escapeHtml(value)+' <span class="error">(Photo is not stored. Please upload it again.)</span></p>';
- const filename=String(value).split('/').pop();
- const url=API_BASE+'/api/files/'+encodeURIComponent(filename)+'?token='+encodeURIComponent(apiToken()||'');
- const isImage=/\.(jpe?g|png|gif|webp|bmp)$/i.test(filename);
- const isPdf=/\.pdf$/i.test(filename);
- return '<div class="admin-file"><b>'+label+':</b>'+
-  (isImage?'<img class="admin-preview" src="'+url+'" alt="'+label+'">':isPdf?'<iframe class="admin-pdf-preview" src="'+url+'" title="'+label+'"></iframe>':'')+
-  '<a href="'+url+'" target="_blank" rel="noopener">Open file</a></div>';
-}
-
-async function openAdminFolder(folder){
- const box=document.getElementById('adminFolderContent');
- box.hidden=false;
- box.innerHTML='<p>Loading documents...</p>';
- try{
-  if(folder==='employeeDocuments'){
-   const employees=await api('/api/admin/employees');
-   box.innerHTML=employees.length?employees.map(e=>'<div class="customer"><h4>'+e.name+' ('+e.employeeId+')</h4>'+ 
-    (adminFileLink('Open profile photo',e.profilePhoto)||'<p>No profile photo uploaded.</p>')+
-    (adminFileLink('Open Aadhaar front',e.aadhaarFile)||'<p>No Aadhaar front uploaded.</p>')+
-    (adminFileLink('Open Aadhaar back',e.aadhaarBackFile)||'<p>No Aadhaar back uploaded.</p>')+'</div>').join(''):'<p>No employee documents found.</p>';
-  }else{
-   const customers=await api('/api/admin/customers');
-    box.innerHTML=customers.length?customers.map(c=>'<div class="customer"><h4>'+c.id+' - '+c.name+'</h4>'+collectAdminDetails(c)+collectAdminFiles(c)+'<button class="danger full" onclick="deleteAdminCustomer(\''+c.customerId+'\')">🗑️ Delete customer file</button></div>').join(''):'<p>No customer documents found.</p>';
-  }
- }catch(error){box.innerHTML='<p class="error">'+error.message+'</p>';}
-}
-
-async function deleteAdminCustomer(customerId){
- if(!confirm('Delete this customer file and all of its saved details? This cannot be undone.')) return;
- try{
-  await api('/api/admin/customers/'+encodeURIComponent(customerId),{method:'DELETE'});
-  alert('Customer file deleted successfully.');
-  await openAdminFolder('customerDocuments');
- }catch(error){alert(error.message);}
-}
-
-function collectAdminFiles(value, path=''){
- if(typeof value==='string' && isStoredDocument(value,path)) return uploadedFileMarkup(path||'Uploaded file',value);
- if(!value || typeof value!=='object') return '';
- return Object.keys(value).map(key=>collectAdminFiles(value[key],path?path+' / '+key:key)).join('');
-}
-
-function isStoredDocument(value,path=''){
- if(typeof value!=='string' || !value || value==='Not uploaded') return false;
- return value.startsWith('/uploads/') || /documents|coApplicant|guarantor/.test(path) && /\.[a-z0-9]{2,5}$/i.test(value);
-}
-
-function collectAdminDetails(value, path=''){
- if(!value || typeof value!=='object') return '';
- return Object.keys(value).map(key=>{
-  const currentPath=path?path+' / '+key:key;
-  const item=value[key];
-  if(typeof item==='string' && isStoredDocument(item,currentPath)) return '';
-  if(item && typeof item==='object') return collectAdminDetails(item,currentPath);
-  if(item===null || item===undefined || item==='') return '';
-  return '<p><b>'+currentPath+':</b> '+String(item)+'</p>';
- }).join('');
-}
-
-async function approve(){
- const id=document.getElementById('empInfo').dataset.employeeId;if(!id){alert('No employee found');return;}
- try{await api('/api/admin/employees/'+id+'/status',{method:'PATCH',body:JSON.stringify({status:'approved'})});alert('Employee approved successfully');loadEmployee();}catch(error){alert(error.message);}
-}
-
-async function disapprove(){
- const id=document.getElementById('empInfo').dataset.employeeId;if(!id){alert('No employee found');return;}
- if(!confirm('Disapprove this employee? They will not be able to log in.')) return;
- try{await api('/api/admin/employees/'+id+'/status',{method:'PATCH',body:JSON.stringify({status:'rejected'})});alert('Employee disapproved');loadEmployee();}catch(error){alert(error.message);}
+    const id = document.getElementById('aId').value
+    const pass = document.getElementById('aPass').value
+    try {
+        const res = await api('/api/auth/admin-login', {
+            method: 'POST',
+            body: JSON.stringify({adminId: id, password: pass})
+        })
+        localStorage.setItem('token', res.token)
+        show('adminDash')
+        loadEmpInfo()
+    } catch (e) {
+        document.getElementById('aError').innerText = e.message
+    }
 }
 
 async function employeeLogin(){
- const id=document.getElementById('eId').value.trim();
- const pass=document.getElementById('ePass').value;
- try{const result=await api('/api/auth/employee-login',{method:'POST',body:JSON.stringify({employeeId:id,password:pass})});sessionStorage.setItem('authToken',result.token);currentEmployee=result.employee;openDash();}
- catch(error){document.getElementById('eError').textContent=error.message;}
-}
-
-function toggleEmployeePassword(){
- const password=document.getElementById('ePass');
- const visible=password.type==='text';
- password.type=visible ? 'password' : 'text';
- document.getElementById('toggleEmployeePassword').textContent=visible ? 'Show' : 'Hide';
-}
-
-function toggleAdminPassword(){
- const password=document.getElementById('aPass');
- const visible=password.type==='text';
- password.type=visible ? 'password' : 'text';
- document.getElementById('toggleAdminPassword').textContent=visible ? 'Show' : 'Hide';
-}
-
-function setResetPasswordStatus(message, isError=false){
- const status=document.getElementById('resetPasswordStatus');
- status.textContent=message;
- status.className=isError ? 'error' : 'status';
+    const id = document.getElementById('eId').value
+    const pass = document.getElementById('ePass').value
+    try {
+        const res = await api('/api/auth/employee-login', {
+            method: 'POST',
+            body: JSON.stringify({employeeId: id, password: pass})
+        })
+        localStorage.setItem('token', res.token)
+        currentEmployee = res.employee;
+        clearPasswordResetState()
+        openDash()
+    } catch (e) {
+        document.getElementById('eError').innerText = e.message
+    }
 }
 
 async function requestPasswordReset(){
- const employeeId=document.getElementById('eId').value.trim();
- if(!employeeId){setResetPasswordStatus('Enter your employee ID first.',true);document.getElementById('eId').focus();return;}
- try{
-  const result=await api('/api/auth/request-password-reset',{method:'POST',body:JSON.stringify({employeeId})});
-  passwordResetToken='';
-  document.getElementById('resetOtp').value='';
-  document.getElementById('resetOtpPanel').hidden=false;
-  document.getElementById('newPasswordPanel').hidden=true;
-  setResetPasswordStatus(result.message);
-  document.getElementById('resetOtp').focus();
- }catch(error){setResetPasswordStatus(error.message,true);}
+    const status = document.getElementById('resetPasswordStatus')
+    const employeeId = document.getElementById('eId').value.trim()
+    status.innerText = ''
+    document.getElementById('eError').innerText = ''
+    if (!employeeId) {
+        status.innerText = 'Enter your Employee ID first.'
+        return
+    }
+    try {
+        const result = await api('/api/auth/request-password-reset', {
+            method: 'POST',
+            body: JSON.stringify({employeeId})
+        })
+        clearPasswordResetState()
+        savePasswordResetState('otp')
+        document.getElementById('resetOtpPanel').hidden = false
+        document.getElementById('newPasswordPanel').hidden = true
+        status.innerText = result.message
+        document.getElementById('resetOtp').focus()
+    } catch (error) {
+        status.innerText = error.message
+    }
 }
 
 async function verifyPasswordResetOtp(){
- const employeeId=document.getElementById('eId').value.trim();
- const otp=document.getElementById('resetOtp').value.trim();
- if(!otp){setResetPasswordStatus('Enter the OTP sent to your email.',true);return;}
- try{
-  const result=await api('/api/auth/verify-password-reset-otp',{method:'POST',body:JSON.stringify({employeeId,otp})});
-  passwordResetToken=result.resetToken;
-  document.getElementById('newEmployeePassword').value='';
-  document.getElementById('confirmEmployeePassword').value='';
-  document.getElementById('newPasswordPanel').hidden=false;
-  setResetPasswordStatus(result.message);
-  document.getElementById('newEmployeePassword').focus();
- }catch(error){setResetPasswordStatus(error.message,true);}
+    const status = document.getElementById('resetPasswordStatus')
+    const employeeId = document.getElementById('eId').value.trim()
+    const otp = document.getElementById('resetOtp').value.trim()
+    status.innerText = ''
+    try {
+        const result = await api('/api/auth/verify-password-reset-otp', {
+            method: 'POST',
+            body: JSON.stringify({employeeId, otp})
+        })
+        passwordResetToken = result.resetToken
+        savePasswordResetState('newPassword', passwordResetToken)
+        document.getElementById('resetOtpPanel').hidden = true
+        document.getElementById('newPasswordPanel').hidden = false
+        status.innerText = result.message
+        document.getElementById('newEmployeePassword').focus()
+    } catch (error) {
+        status.innerText = error.message
+    }
 }
 
 async function saveNewEmployeePassword(){
- const password=document.getElementById('newEmployeePassword').value;
- const confirmation=document.getElementById('confirmEmployeePassword').value;
- if(!passwordResetToken){setResetPasswordStatus('Confirm the OTP before setting a new password.',true);return;}
- if(password!==confirmation){setResetPasswordStatus('Passwords do not match.',true);return;}
- try{
-  const result=await api('/api/auth/reset-password',{method:'POST',body:JSON.stringify({resetToken:passwordResetToken,password})});
-  passwordResetToken='';
-  document.getElementById('ePass').value='';
-  document.getElementById('resetOtpPanel').hidden=true;
-  document.getElementById('newPasswordPanel').hidden=true;
-  setResetPasswordStatus(result.message);
- }catch(error){setResetPasswordStatus(error.message,true);}
+    const status = document.getElementById('resetPasswordStatus')
+    const password = document.getElementById('newEmployeePassword').value
+    const confirmation = document.getElementById('confirmEmployeePassword').value
+    status.innerText = ''
+    if (!passwordResetToken) {
+        status.innerText = 'Verify the OTP before choosing a new password.'
+        return
+    }
+    if (password.length < 12) {
+        status.innerText = 'New password must be at least 12 characters.'
+        return
+    }
+    if (password !== confirmation) {
+        status.innerText = 'Passwords do not match.'
+        return
+    }
+    try {
+        const result = await api('/api/auth/reset-password', {
+            method: 'POST',
+            body: JSON.stringify({resetToken: passwordResetToken, password})
+        })
+        clearPasswordResetState()
+        document.getElementById('resetOtp').value = ''
+        document.getElementById('newEmployeePassword').value = ''
+        document.getElementById('confirmEmployeePassword').value = ''
+        document.getElementById('newPasswordPanel').hidden = true
+        status.innerText = `${result.message} You can now log in with your new password.`
+    } catch (error) {
+        status.innerText = error.message
+    }
 }
 
-async function openDash(){
- let e=currentEmployee;
- if(!e && apiToken()) {try{e=(await api('/api/employees/me')).employee;currentEmployee=e;}catch(error){sessionStorage.removeItem('authToken');show('home');return;}}
- if(e) document.getElementById('welcome').textContent='Welcome, '+e.name;
- updateStats();
- show('employeeDash');
+async function loadEmpInfo(){
+    const status = document.getElementById('adminActionStatus')
+    status.innerText = ''
+    try {
+        const res = await api('/api/admin/employees')
+        const list = res.map(e=>`
+            <div class="customer">
+                <p><b>Name:</b> ${e.name}</p>
+                <p><b>ID:</b> ${e.employeeId}</p>
+                <p><b>Mobile:</b> ${e.mobile}</p>
+                <p><b>Email:</b> ${e.email}</p>
+                <p><b>Status:</b> <span class="badge">${e.status}</span></p>
+                <button class="success" onclick="setEmployeeStatus('${e.id}', 'approved', this)">✅ Approve</button>
+                <button class="danger" onclick="setEmployeeStatus('${e.id}', 'rejected', this)">❌ Disapprove</button>
+            </div>
+        `).join('')
+        document.getElementById('empInfo').innerHTML = list || '<p>No employees registered.</p>'
+    } catch (e) {
+        status.innerText = e.message
+    }
 }
 
-async function openProfile(){
- let e=currentEmployee;
- try{e=(await api('/api/employees/me')).employee;currentEmployee=e;}catch(error){alert(error.message);return;}
- if(!e){
-  alert('Employee profile not found');
-  show('home');
-  return;
- }
- document.getElementById('profileName').value=e.name||'';
- document.getElementById('profileId').value=e.id||'';
- document.getElementById('profileMobile').value=e.mobile||'';
- document.getElementById('profileEmail').value=e.email||'';
- document.getElementById('profileAlternateMobile').value=e.alternateMobile||'';
- document.getElementById('profileAddress').value=e.address||'';
- document.getElementById('profileAadhaar').value='';
- document.getElementById('profileAadhaarBack').value='';
- document.getElementById('profileAadhaarStatus').textContent=e.aadhaarFile ? 'Front uploaded' : 'Front photo required';
- document.getElementById('profileAadhaarBackStatus').textContent=e.aadhaarBackFile ? 'Back uploaded' : 'Back photo required';
- show('employeeProfile');
+function escapeHtml(value){
+    return String(value ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]))
 }
 
-async function saveProfile(){
- const alternateMobile=document.getElementById('profileAlternateMobile').value.trim();
- if(alternateMobile && !/^\d{10}$/.test(alternateMobile)){
-  alert('Alternate phone number must be exactly 10 digits.');
-  return;
- }
- const form=new FormData();
- form.append('alternateMobile',alternateMobile);form.append('address',document.getElementById('profileAddress').value.trim());
- const aadhaarInput=document.getElementById('profileAadhaar');
- const aadhaarBackInput=document.getElementById('profileAadhaarBack');
- if(aadhaarInput.files.length)form.append('aadhaar',aadhaarInput.files[0]);
- if(aadhaarBackInput.files.length)form.append('aadhaarBack',aadhaarBackInput.files[0]);
- if(!currentEmployee?.aadhaarFile && !aadhaarInput.files.length || !currentEmployee?.aadhaarBackFile && !aadhaarBackInput.files.length){alert('Aadhaar front and back photos are required.');return;}
- try{const result=await api('/api/employees/me',{method:'PATCH',body:form});currentEmployee=result.employee;document.getElementById('profileAadhaarStatus').textContent='Front uploaded';document.getElementById('profileAadhaarBackStatus').textContent='Back uploaded';alert('Profile saved successfully');}
- catch(error){alert(error.message);}
+function adminFileUrl(filePath){
+    const filename = filePath.split('/').pop()
+    const token = encodeURIComponent(localStorage.getItem('token') || '')
+    return `/api/files/${encodeURIComponent(filename)}?token=${token}`
+}
+
+function employeeFileLink(filePath, label){
+    if (!filePath || !filePath.startsWith('/uploads/')) return ''
+    const url = adminFileUrl(filePath)
+    const safeLabel = escapeHtml(label)
+    if (/\.(png|jpe?g|gif|webp)$/i.test(filePath)) {
+        return `<a href="${url}" target="_blank" rel="noopener"><img class="admin-preview" src="${url}" alt="${safeLabel}"></a><a class="admin-file" href="${url}" target="_blank" rel="noopener">Open ${safeLabel}</a>`
+    }
+    if (/\.pdf$/i.test(filePath)) {
+        return `<iframe class="admin-pdf-preview" src="${url}" title="${safeLabel}"></iframe><a class="admin-file" href="${url}" target="_blank" rel="noopener">Open ${safeLabel}</a>`
+    }
+    return `<a class="admin-file" href="${url}" target="_blank" rel="noopener">${safeLabel}</a>`
+}
+
+function renderCustomerValue(label, value){
+    if (value === null || value === undefined || value === '') return ''
+    const safeLabel = escapeHtml(label)
+    if (typeof value === 'string' && value.startsWith('/uploads/')) {
+        return `<div class="doc"><b>${safeLabel}</b>${employeeFileLink(value, label)}</div>`
+    }
+    if (typeof value === 'object') {
+        const entries = Array.isArray(value) ? value.map((item, index) => [index + 1, item]) : Object.entries(value)
+        const children = entries.map(([key, item]) => renderCustomerValue(key, item)).join('')
+        return children ? `<div class="doc"><b>${safeLabel}</b>${children}</div>` : ''
+    }
+    return `<p><b>${safeLabel}:</b> ${escapeHtml(value)}</p>`
+}
+
+function confirmAdminCustomerDelete(id){
+    document.getElementById(`customerDeleteConfirm_${id}`).hidden = false
+}
+
+function cancelAdminCustomerDelete(id){
+    document.getElementById(`customerDeleteConfirm_${id}`).hidden = true
+}
+
+async function deleteAdminCustomer(id, button){
+    const status = document.getElementById(`customerDeleteStatus_${id}`)
+    button.disabled = true
+    status.innerText = 'Deleting customer file...'
+    try {
+        await api(`/api/admin/customers/${encodeURIComponent(id)}`, {method: 'DELETE'})
+        await openAdminFolder('customerDocuments')
+    } catch (error) {
+        status.innerText = error.message
+        button.disabled = false
+    }
+}
+
+function confirmAdminEmployeeDelete(id){
+    document.getElementById(`employeeDeleteConfirm_${id}`).hidden = false
+}
+
+function cancelAdminEmployeeDelete(id){
+    document.getElementById(`employeeDeleteConfirm_${id}`).hidden = true
+}
+
+async function deleteAdminEmployeeRequest(id, button){
+    const status = document.getElementById(`employeeDeleteStatus_${id}`)
+    button.disabled = true
+    status.innerText = 'Deleting employee request...'
+    try {
+        await api(`/api/admin/employees/${encodeURIComponent(id)}`, {method: 'DELETE'})
+        await loadEmpInfo()
+        await openAdminFolder('employeeDocuments')
+    } catch (error) {
+        status.innerText = error.message
+        button.disabled = false
+    }
+}
+
+function confirmAdminEmployeeProfileDelete(id){
+    document.getElementById(`employeeProfileDeleteConfirm_${id}`).hidden = false
+}
+
+function cancelAdminEmployeeProfileDelete(id){
+    document.getElementById(`employeeProfileDeleteConfirm_${id}`).hidden = true
+}
+
+async function deleteAdminEmployeeProfile(id, button){
+    const status = document.getElementById(`employeeProfileDeleteStatus_${id}`)
+    button.disabled = true
+    status.innerText = 'Deleting employee profile...'
+    try {
+        await api(`/api/admin/employees/${encodeURIComponent(id)}`, {method: 'DELETE'})
+        await loadEmpInfo()
+        await openAdminFolder('employeeDocuments')
+    } catch (error) {
+        status.innerText = error.message
+        button.disabled = false
+    }
+}
+
+async function openAdminFolder(folder){
+    const content = document.getElementById('adminFolderContent')
+    activeAdminFolder = folder
+    content.hidden = false
+    content.innerHTML = folder === 'customerDocuments' ? '<p>Loading customer files...</p>' : '<p>Loading employee details and requests...</p>'
+    if (folder === 'customerDocuments') {
+        try {
+            const customers = await api('/api/admin/customers')
+            const records = customers.length ? customers.map(customer => {
+                const id = escapeHtml(customer.customerId)
+                const fields = Object.entries(customer).filter(([key]) => !['customerId', 'createdAt', 'uploadedBy', 'status'].includes(key))
+                    .map(([key, value]) => renderCustomerValue(key, value)).join('')
+                const uploader = customer.uploadedBy ? `${escapeHtml(customer.uploadedBy.name)} (${escapeHtml(customer.uploadedBy.employeeId)})` : 'Unknown employee'
+                return `<div class="customer">
+                    <p><b>Uploaded by:</b> ${uploader}</p>
+                    <p><b>Uploaded:</b> ${customer.createdAt ? new Date(customer.createdAt).toLocaleString() : 'N/A'}</p>
+                    <p><b>Status:</b> <span class="badge">${escapeHtml(customer.status || 'pending')}</span></p>
+                    ${fields || '<p>No customer details available.</p>'}
+                    <button class="danger" onclick="confirmAdminCustomerDelete('${id}')">🗑 Delete Customer File</button>
+                    <span id="customerDeleteConfirm_${id}" hidden>
+                        <p>Delete this customer file and its uploaded documents?</p>
+                        <button class="danger" onclick="deleteAdminCustomer('${id}', this)">Confirm Delete</button>
+                        <button class="secondary" onclick="cancelAdminCustomerDelete('${id}')">Cancel</button>
+                    </span>
+                    <p id="customerDeleteStatus_${id}" class="error" aria-live="polite"></p>
+                </div>`
+            }).join('') : '<p>No customer files uploaded yet.</p>'
+            content.innerHTML = `<h3>Customer Files (${customers.length})</h3>${records}`
+        } catch (error) {
+            content.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`
+        }
+        return
+    }
+    if (folder !== 'employeeDocuments') {
+        content.innerHTML = '<p>Select a folder to view its documents.</p>'
+        return
+    }
+    try {
+        const employees = await api('/api/admin/employees')
+        const requests = employees.filter(employee => employee.status === 'pending')
+        const requestMarkup = requests.length ? requests.map(employee => `
+            <div class="customer">
+                <p><b>${escapeHtml(employee.name)}</b> · ${escapeHtml(employee.employeeId)}</p>
+                <p>${escapeHtml(employee.mobile)} · ${escapeHtml(employee.email)}</p>
+                <button class="success" onclick="setEmployeeStatus('${escapeHtml(employee.id)}', 'approved', this)">✅ Approve</button>
+                <button class="danger" onclick="setEmployeeStatus('${escapeHtml(employee.id)}', 'rejected', this)">❌ Disapprove</button>
+                <button class="danger" onclick="confirmAdminEmployeeDelete('${escapeHtml(employee.id)}')">🗑 Delete Request</button>
+                <span id="employeeDeleteConfirm_${escapeHtml(employee.id)}" hidden>
+                    <p>Delete this pending employee request?</p>
+                    <button class="danger" onclick="deleteAdminEmployeeRequest('${escapeHtml(employee.id)}', this)">Confirm Delete</button>
+                    <button class="secondary" onclick="cancelAdminEmployeeDelete('${escapeHtml(employee.id)}')">Cancel</button>
+                </span>
+                <p id="employeeDeleteStatus_${escapeHtml(employee.id)}" class="error" aria-live="polite"></p>
+            </div>
+        `).join('') : '<p>No pending employee requests.</p>'
+        const employeeMarkup = employees.length ? employees.map(employee => {
+            const documents = Object.entries(employee.documents || {}).map(([name, filePath]) => employeeFileLink(filePath, name)).join('')
+            return `<div class="customer">
+                <p><b>Name:</b> ${escapeHtml(employee.name)}</p>
+                <p><b>Employee ID:</b> ${escapeHtml(employee.employeeId)}</p>
+                <p><b>Mobile:</b> ${escapeHtml(employee.mobile)}</p>
+                <p><b>Email:</b> ${escapeHtml(employee.email)}</p>
+                <p><b>Status:</b> <span class="badge">${escapeHtml(employee.status)}</span></p>
+                <p><b>Alternate mobile:</b> ${escapeHtml(employee.alternateMobile || 'Not provided')}</p>
+                <p><b>Address:</b> ${escapeHtml(employee.address || 'Not provided')}</p>
+                <p><b>Registered:</b> ${employee.createdAt ? new Date(employee.createdAt).toLocaleDateString() : 'N/A'}</p>
+                <b>Profile photo</b>${employeeFileLink(employee.profilePhoto, 'View profile photo') || '<p>Not uploaded</p>'}
+                <b>Aadhaar front</b>${employeeFileLink(employee.aadhaarFile, 'View Aadhaar front') || '<p>Not uploaded</p>'}
+                <b>Aadhaar back</b>${employeeFileLink(employee.aadhaarBackFile, 'View Aadhaar back') || '<p>Not uploaded</p>'}
+                <b>Other documents</b>${documents || '<p>None uploaded</p>'}
+                <button class="danger" onclick="confirmAdminEmployeeProfileDelete('${escapeHtml(employee.id)}')">🗑 Delete Employee Profile</button>
+                <span id="employeeProfileDeleteConfirm_${escapeHtml(employee.id)}" hidden>
+                    <p>This deletes the employee account and profile documents. Customer files will be retained, and the employee must register again.</p>
+                    <button class="danger" onclick="deleteAdminEmployeeProfile('${escapeHtml(employee.id)}', this)">Confirm Profile Delete</button>
+                    <button class="secondary" onclick="cancelAdminEmployeeProfileDelete('${escapeHtml(employee.id)}')">Cancel</button>
+                </span>
+                <p id="employeeProfileDeleteStatus_${escapeHtml(employee.id)}" class="error" aria-live="polite"></p>
+            </div>`
+        }).join('') : '<p>No employee records found.</p>'
+        content.innerHTML = `<h3>Employee Requests (${requests.length})</h3>${requestMarkup}<h3>All Employee Details (${employees.length})</h3>${employeeMarkup}`
+    } catch (error) {
+        content.innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`
+    }
+}
+
+async function setEmployeeStatus(id, status, button){
+    const message = document.getElementById('adminActionStatus')
+    message.innerText = ''
+    button.disabled = true
+    try {
+        await api(`/api/admin/employees/${id}/status`, {
+            method: 'PATCH',
+            body: JSON.stringify({status})
+        })
+        await loadEmpInfo()
+        if (activeAdminFolder === 'employeeDocuments') await openAdminFolder(activeAdminFolder)
+    } catch (e) {
+        message.innerText = e.message
+        button.disabled = false
+    }
+}
+
+function openDash(){
+    document.getElementById('welcome').innerText = `Welcome, ${currentEmployee.name}`
+    show('employeeDash')
+    loadStats()
+}
+
+async function loadStats(){
+    try {
+        const res = await api('/api/customers/stats')
+        document.getElementById('countCustomers').innerText = res.customers
+        document.getElementById('countFiles').innerText = res.files
+        document.getElementById('countPending').innerText = res.pending
+    } catch (e) {
+        alert(e.message)
+    }
 }
 
 function openAdd(){
- editingCustomerId='';
- document.getElementById('cusId').value='';
- document.getElementById('saveMsg').textContent='';
- document.getElementById('resubmitHint').textContent='Upload customer documents and photos, then submit the complete file.';
- show('addCustomer');
+    editingCustomerId = null
+    resetCustomerForm()
+    show('addCustomer')
 }
 
-function openEditCustomer(customerId){
- const customer=customerCache.find(item=>String(item.id)===String(customerId));
- if(!customer) return;
- editingCustomerId=customerId;
- const fields={
-  cusId:customer.id,cusName:customer.name,cusMobile:customer.mobile,cusFather:customer.father,
-  cusQuotation:customer.quotation,cusFinanceRefinance:customer.financeRefinance,
-  cusVehicleCost:customer.vehicleCost,cusFinanceAmount:customer.financeAmount,
-  cusAddress:customer.address,cusMobileDoc:customer.mobileDoc,
-  coName:customer.coApplicant?.name,coMobile:customer.coApplicant?.mobile,
-  gName:customer.guarantor?.name,gMobile:customer.guarantor?.mobile,
-  r1Name:customer.reference1?.name,r1Mobile:customer.reference1?.mobile,r1Relation:customer.reference1?.relation,r1Address:customer.reference1?.address,
-  r2Name:customer.reference2?.name,r2Mobile:customer.reference2?.mobile,r2Relation:customer.reference2?.relation,r2Address:customer.reference2?.address
- };
- Object.keys(fields).forEach(id=>{const input=document.getElementById(id);if(input) input.value=fields[id]||'';});
- document.querySelectorAll('#addCustomer input[type="file"]').forEach(input=>{input.value='';});
- document.getElementById('resubmitHint').textContent='Select only the photos or documents you want to replace. All other uploaded files will remain unchanged.';
- document.getElementById('saveMsg').textContent='';
- show('addCustomer');
+function resetCustomerForm(){
+    document.querySelector('#addCustomer .card').querySelectorAll('input, textarea').forEach(input => { input.value = '' })
+    document.getElementById('saveCustomerButton').innerText = '✅ Submit Complete Customer File'
+    document.getElementById('saveMsg').innerText = ''
 }
 
-function fileStatus(inputId,statusId){
- const input=document.getElementById(inputId);
- const status=document.getElementById(statusId);
- if(input&&status){
-  input.addEventListener('change',function(){
-   status.textContent=this.files.length?'✅ Uploaded: '+this.files[0].name:'';
-  });
- }
+async function editUploadedCustomer(id){
+    const status = document.getElementById('saveMsg')
+    status.innerText = 'Loading customer file...'
+    try {
+        const customers = await api('/api/customers?mine=true')
+        const customer = customers.find(record => String(record.recordId) === String(id))
+        if (!customer) throw new Error('This customer file is no longer available in your uploads.')
+        const fields = {
+            cusId: customer.id,
+            cusName: customer.name,
+            cusMobile: customer.mobile,
+            cusFather: customer.fatherName,
+            cusQuotation: customer.quotation,
+            cusFinanceRefinance: customer.financeRefinance,
+            cusVehicleCost: customer.vehicleCost,
+            cusFinanceAmount: customer.financeAmount,
+            cusAddress: customer.address,
+            cusMobileDoc: customer.documents?.mobile,
+            coName: customer.coApplicant?.name,
+            coMobile: customer.coApplicant?.mobile,
+            gName: customer.guarantor?.name,
+            gMobile: customer.guarantor?.mobile,
+            r1Name: customer.reference1?.name,
+            r1Mobile: customer.reference1?.mobile,
+            r1Relation: customer.reference1?.relation,
+            r1Address: customer.reference1?.address,
+            r2Name: customer.reference2?.name,
+            r2Mobile: customer.reference2?.mobile,
+            r2Relation: customer.reference2?.relation,
+            r2Address: customer.reference2?.address
+        }
+        resetCustomerForm()
+        Object.entries(fields).forEach(([field, value]) => { document.getElementById(field).value = value || '' })
+        editingCustomerId = customer.recordId
+        document.getElementById('saveCustomerButton').innerText = '💾 Save Changes'
+        document.getElementById('resubmitHint').innerText = 'Choose only documents you want to replace. Existing uploads will be kept.'
+        show('addCustomer')
+    } catch (error) {
+        status.innerText = error.message
+    }
 }
 
-[
- ['cusAadhaar','sCusAadhaar'],['cusPan','sCusPan'],['cusDl','sCusDl'],
- ['cusBill','sCusBill'],['cusFleet','sCusFleet'],['cusRc','sCusRc'],['cusPhoto','sCusPhoto'],
- ['coAadhaar','sCoAadhaar'],['coPan','sCoPan'],['coBill','sCoBill'],['coRc','sCoRc'],['coPhoto','sCoPhoto'],
- ['gAadhaar','sGAadhaar'],['gPan','sGPan'],['gRc','sGRc'],['gFleet','sGFleet'],['gPhoto','sGPhoto']
-].forEach(x=>fileStatus(x[0],x[1]));
+function customerCards(customers, showFiles = false, allowEdit = false){
+    if (!customers.length) return '<p>No customer records found.</p>'
+    return customers.map(customer => {
+        const files = []
+        const collectFiles = (value, label = 'Document') => {
+            if (typeof value === 'string' && value.startsWith('/uploads/')) files.push(employeeFileLink(value, label))
+            else if (value && typeof value === 'object') Object.entries(value).forEach(([key, item]) => collectFiles(item, key))
+        }
+        if (showFiles) collectFiles(customer.documents || {})
+        const details = Object.entries(customer)
+            .filter(([key]) => !['id', 'recordId', 'name', 'mobile', 'status', 'createdAt', 'uploadedBy'].includes(key))
+            .map(([key, value]) => renderCustomerValue(key, value)).join('')
+        return `<div class="customer">
+            <p><b>Name:</b> ${customer.name || 'N/A'}</p>
+            <p><b>File Number:</b> ${customer.id || 'N/A'}</p>
+            <p><b>Mobile:</b> ${customer.mobile || 'N/A'}</p>
+            <p><b>Status:</b> <span class="badge">${customer.status || 'pending'}</span></p>
+            <p><b>Created:</b> ${customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : 'N/A'}</p>
+            ${customer.uploadedBy ? `<p><b>Uploaded by:</b> ${escapeHtml(customer.uploadedBy.name)} (${escapeHtml(customer.uploadedBy.employeeId)})</p>` : ''}
+            ${showFiles ? files.join('') || '<p>No uploaded documents.</p>' : ''}
+            <details><summary>View full file details</summary>${details || '<p>No additional details.</p>'}</details>
+            ${allowEdit ? `<button class="primary" onclick="editUploadedCustomer('${escapeHtml(customer.recordId)}')">✏️ Edit File</button>` : ''}
+        </div>`
+    }).join('')
+}
 
-document.querySelectorAll('#addCustomer input[type="file"]').forEach(input=>{
- input.setAttribute('accept','image/*,.pdf,.doc,.docx,.xls,.xlsx,.mp4,.mov,.avi');
- input.setAttribute('capture','environment');
-});
+async function showCustomerRecords(title, filter, showFiles = false, allowEdit = false, mineOnly = false){
+    const heading = document.querySelector('#history .header h2')
+    const description = document.querySelector('#history .header p')
+    const list = document.getElementById('historyList')
+    heading.innerText = title
+    description.innerText = filter === 'all' ? 'Customer finance history' : 'Customer records'
+    list.innerHTML = '<p>Loading customer records...</p>'
+    show('history')
+    try {
+        const customers = await api(mineOnly ? '/api/customers?mine=true' : '/api/customers')
+        const filtered = filter === 'all' ? customers : customers.filter(customer => (customer.status || 'pending') === filter)
+        list.innerHTML = customerCards(filtered, showFiles, allowEdit)
+    } catch (error) {
+        list.innerText = error.message
+    }
+}
 
-function val(id){return document.getElementById(id).value.trim()}
+function openList(){
+    showCustomerRecords('👥 Customer List', 'all')
+}
 
-function fileName(id){
- const f=document.getElementById(id).files[0];
- return f?f.name:'Not uploaded';
+function openPendingFiles(){
+    show('pendingFiles')
+    const list = document.getElementById('pendingFilesList')
+    list.innerHTML = '<p>Loading pending files...</p>'
+    api('/api/customers').then(customers => {
+        const pending = customers.filter(customer => (customer.status || 'pending') === 'pending')
+        list.innerHTML = customerCards(pending, true)
+    }).catch(error => { list.innerText = error.message })
+}
+
+function openAdminFiles(){
+    showCustomerRecords('📁 My uploaded', 'all', true, true, true)
+}
+
+function openHistory(){
+    showCustomerRecords('📜 Customer History', 'all')
+}
+
+async function openProfile(){
+    show('employeeProfile')
+    const status = document.getElementById('profileAadhaarStatus')
+    status.innerText = 'Loading profile...'
+    try {
+        const result = await api('/api/employees/me')
+        const employee = result.employee
+        currentEmployee = employee
+        document.getElementById('profileName').value = employee.name || ''
+        document.getElementById('profileId').value = employee.employeeId || ''
+        document.getElementById('profileMobile').value = employee.mobile || ''
+        document.getElementById('profileEmail').value = employee.email || ''
+        document.getElementById('profileAlternateMobile').value = employee.alternateMobile || ''
+        document.getElementById('profileAddress').value = employee.address || ''
+        const front = document.getElementById('profileAadhaarPreview')
+        const back = document.getElementById('profileAadhaarBackPreview')
+        front.hidden = !employee.aadhaarFile
+        back.hidden = !employee.aadhaarBackFile
+        if (employee.aadhaarFile) front.src = employee.aadhaarFile
+        if (employee.aadhaarBackFile) back.src = employee.aadhaarBackFile
+        status.innerText = employee.aadhaarFile && employee.aadhaarBackFile ? 'Aadhaar front and back are saved.' : 'Upload Aadhaar front and back to save your profile.'
+    } catch (error) {
+        status.innerText = error.message
+    }
+}
+
+async function saveProfile(){
+    const status = document.getElementById('profileAadhaarStatus')
+    const form = new FormData()
+    form.append('alternateMobile', document.getElementById('profileAlternateMobile').value)
+    form.append('address', document.getElementById('profileAddress').value)
+    for (const [inputId, field] of [['profileAadhaar', 'aadhaar'], ['profileAadhaarBack', 'aadhaarBack']]) {
+        const file = document.getElementById(inputId).files[0]
+        if (file) form.append(field, file)
+    }
+    status.innerText = 'Saving profile...'
+    try {
+        const result = await api('/api/employees/me', {method: 'PATCH', body: form})
+        currentEmployee = result.employee
+        status.innerText = 'Profile saved.'
+        await openProfile()
+    } catch (error) {
+        status.innerText = error.message
+    }
 }
 
 async function saveCustomer(){
- const customerId=val('cusId'),
- name=val('cusName'),
- mobile=val('cusMobile');
- if(!customerId||!name||!mobile){
-  alert('Customer ID, name, and Mobile number are required');
-  return;
- }
- if(!/^\d{10}$/.test(mobile)){
-  alert('Mobile number must be exactly 10 digits.');
-  return;
- }
-
- const customer={
-  id:customerId,
-  name:val('cusName'),
-  mobile:val('cusMobile'),
-  father:val('cusFather'),
-  quotation:val('cusQuotation'),
-  financeRefinance:val('cusFinanceRefinance'),
-  vehicleCost:val('cusVehicleCost'),
-  financeAmount:val('cusFinanceAmount'),
-  address:val('cusAddress'),
-  mobileDoc:val('cusMobileDoc'),
-  documents:{
-   aadhaar:{
-    front:fileName('cusAadhaarFront'),
-    back:fileName('cusAadhaarBack')
-
-   },
-   pan:fileName('cusPan'),
-   dl:{front:fileName('cusDlFront'),
-   back:fileName('cusDlBack')},
-   electricityBill:fileName('cusBill'),fleet:fileName('cusFleet'),
-   rc:{front:fileName('cusRcFront'),back:fileName('cusRcBack'),photo:fileName('cusPhoto')}
-  },
-  coApplicant:{
-   name:val('coName'),mobile:val('coMobile'),
-    aadhaar:{front:fileName('coAadhaarFront'),back:fileName('coAadhaarBack')},
-   pan:fileName('coPan'),
-   electricityBill:fileName('coBill'),
-    rc:{front:fileName('coRcFront'),back:fileName('coRcBack'),photo:fileName('coPhoto')}
-  },
-  guarantor:{
-   name:val('gName'),mobile:val('gMobile'),
-    aadhaar:{front:fileName('gAadhaarFront'),back:fileName('gAadhaarBack')},
-   pan:fileName('gPan'),
-    rc:{front:fileName('gRcFront'),back:fileName('gRcBack'),photo:fileName('gPhoto')},
-   fleet:fileName('gFleet')},
-  reference1:{
-   name:val('r1Name'),mobile:val('r1Mobile'),relation:val('r1Relation'),address:val('r1Address')
-  },
-  reference2:{
-   name:val('r2Name'),mobile:val('r2Mobile'),relation:val('r2Relation'),address:val('r2Address')
-  },
-  
- };
-
- const form=new FormData();
- form.append('customerData',JSON.stringify(customer));
- const uploadFields=['cusAadhaarFront','cusAadhaarBack','cusPan','cusDlFront','cusDlBack','cusBill','cusFleet','cusRcFront','cusRcBack','cusPhoto','coAadhaarFront','coAadhaarBack','coPan','coBill','coRcFront','coRcBack','coPhoto','gAadhaarFront','gAadhaarBack','gPan','gRcFront','gRcBack','gPhoto','gFleet'];
- uploadFields.forEach(field=>{
-  const input=document.getElementById(field);
-  if(input?.files?.[0]) form.append(field,input.files[0]);
- });
- const endpoint=editingCustomerId?'/api/customers/'+encodeURIComponent(editingCustomerId):'/api/customers';
- const method=editingCustomerId?'PATCH':'POST';
- try{await api(endpoint,{method,body:form});document.getElementById('saveMsg').textContent=editingCustomerId?'✅ Customer File resubmitted for admin review':'✅ Customer File '+customer.id+' created successfully';editingCustomerId='';updateStats();setTimeout(openList,700);}
- catch(error){alert(error.message);}
+    const status = document.getElementById('saveMsg')
+    const value = id => document.getElementById(id).value.trim()
+    const data = {
+        id: value('cusId'), name: value('cusName'), mobile: value('cusMobile'),
+        fatherName: value('cusFather'), quotation: value('cusQuotation'),
+        financeRefinance: value('cusFinanceRefinance'), vehicleCost: value('cusVehicleCost'),
+        financeAmount: value('cusFinanceAmount'), address: value('cusAddress'),
+        documents: {mobile: value('cusMobileDoc')},
+        coApplicant: {name: value('coName'), mobile: value('coMobile')},
+        guarantor: {name: value('gName'), mobile: value('gMobile')},
+        reference1: {name: value('r1Name'), mobile: value('r1Mobile'), relation: value('r1Relation'), address: value('r1Address')},
+        reference2: {name: value('r2Name'), mobile: value('r2Mobile'), relation: value('r2Relation'), address: value('r2Address')}
+    }
+    const form = new FormData()
+    form.append('customerData', JSON.stringify(data))
+    const fileFields = ['cusAadhaarFront','cusAadhaarBack','cusPan','cusDlFront','cusDlBack','cusBill','cusFleet','cusRcFront','cusRcBack','cusPhoto','coAadhaarFront','coAadhaarBack','coPan','coBill','coRcFront','coRcBack','coPhoto','gAadhaarFront','gAadhaarBack','gPan','gRcFront','gRcBack','gFleet','gPhoto']
+    fileFields.forEach(field => {
+        const file = document.getElementById(field).files[0]
+        if (file) form.append(field, file)
+    })
+    const isEditing = Boolean(editingCustomerId)
+    status.innerText = isEditing ? 'Updating customer file...' : 'Saving customer file...'
+    try {
+        const url = isEditing ? `/api/customers/${encodeURIComponent(editingCustomerId)}` : '/api/customers'
+        await api(url, {method: isEditing ? 'PATCH' : 'POST', body: form})
+        editingCustomerId = null
+        resetCustomerForm()
+        status.innerText = isEditing ? 'Customer file updated.' : 'Customer file saved.'
+        await loadStats()
+    } catch (error) {
+        status.innerText = error.message
+    }
 }
 
-async function openList(){
- let all=[];try{all=await api('/api/customers');}catch(error){alert(error.message);return;}
- const box=document.getElementById('list');
- if(!all.length){
-  box.innerHTML='<p>No customers added yet.</p>';
- }else{
-  box.innerHTML=all.slice().reverse().map(c=>
-   '<div class="customer"><h3>👤 '+c.name+'</h3>'+
-   '<p><b>File No:</b> '+c.id+'</p>'+
-   '<p><b>Mobile:</b> '+c.mobile+'</p>'+
-   '<p><b>Co-Applicant:</b> '+(c.coApplicant.name||'Not Added')+'</p>'+
-   '<p><b>Guarantor:</b> '+(c.guarantor.name||'Not Added')+'</p>'+
-   '<p><b>Reference 1:</b> '+(c.reference1.name||'Not Added')+' - '+(c.reference1.mobile||'')+'</p>'+
-   '<p><b>Reference 2:</b> '+(c.reference2.name||'Not Added')+' - '+(c.reference2.mobile||'')+'</p>'+
-   '<p><b>Created:</b> '+c.createdAt+'</p><span class="badge">File Created</span></div>'
-  ).join('');
- }
- show('customerList');
+function logout(){
+    localStorage.removeItem('token')
+    currentEmployee = null;
+    show('home')
 }
 
-async function openPendingFiles(){
- let all=[];
- try{all=await api('/api/customers');}catch(error){alert(error.message);return;}
- const pending=all.filter(customer=>customer.status!=='confirmed');
- const box=document.getElementById('pendingFilesList');
- if(!pending.length){
-  box.innerHTML='<p>No pending customer files.</p>';
- }else{
-  box.innerHTML=pending.slice().reverse().map(c=>
-   '<div class="customer"><h3>⏳ '+c.name+'</h3>'+
-   '<p><b>Customer ID:</b> '+c.id+'</p>'+ 
-   '<p><b>Mobile:</b> '+c.mobile+'</p>'+ 
-   '<p><b>Co-Applicant:</b> '+(c.coApplicant?.name||'Not Added')+'</p>'+ 
-   '<p><b>Guarantor:</b> '+(c.guarantor?.name||'Not Added')+'</p>'+ 
-   '<p><b>Created:</b> '+c.createdAt+'</p>'+ 
-   '<span class="badge pending">Pending</span></div>'
-  ).join('');
- }
- show('pendingFiles');
+document.getElementById('otpInput').addEventListener('input', e => {
+    const button = document.getElementById('verifyOtpButton')
+    button.disabled = e.target.value.length !== 6
+})
+
+restorePasswordResetState()
+
+function toggleAdminPassword() {
+    const input = document.getElementById('aPass');
+    const button = document.getElementById('toggleAdminPassword');
+    if (input.type === 'password') {
+        input.type = 'text';
+        button.textContent = 'Hide';
+    } else {
+        input.type = 'password';
+        button.textContent = 'Show';
+    }
 }
 
-async function openHistory(){
- let all=[];
- try{all=await api('/api/customers');}catch(error){alert(error.message);return;}
- const box=document.getElementById('historyList');
- if(!all.length){
-  box.innerHTML='<p>No customer history found.</p>';
- }else{
-  box.innerHTML=all.slice().reverse().map(customer=>
-   '<div class="customer">'+
-   '<p><b>Customer Name:</b> '+escapeHtml(customer.name||'Not Added')+'</p>'+
-   '<p><b>Father\'s Name:</b> '+escapeHtml(customer.father||'Not Added')+'</p>'+
-   '<p><b>Vehicle Finance Status:</b> '+escapeHtml(customer.financeRefinance||'Not Added')+'</p>'+
-   '</div>'
-  ).join('');
- }
- show('history');
+function toggleEmployeePassword() {
+    const input = document.getElementById('ePass');
+    const button = document.getElementById('toggleEmployeePassword');
+    if (input.type === 'password') {
+        input.type = 'text';
+        button.textContent = 'Hide';
+    } else {
+        input.type = 'password';
+        button.textContent = 'Show';
+    }
 }
-
-async function updateStats(){
- try{const stats=await api('/api/customers/stats');document.getElementById('countCustomers').textContent=stats.customers;document.getElementById('countFiles').textContent=stats.files;document.getElementById('countPending').textContent=stats.pending;}catch(error){console.error(error);}
-}
-async function openAdminFiles(){
-
-  let all=[];
-  try{all=await api('/api/customers');customerCache=all;}catch(error){alert(error.message);return;}
-
-  const box =
-    document.getElementById('uploadedFilesList');
-
-  if(!all.length){
-    box.innerHTML = '<p>No uploaded files found.</p>';
-    show('uploadedFiles');
-    return;
-  }
-
-  box.innerHTML = all.slice().reverse().map(c => `
-    <div class="customer">
-
-      <h3>📁 ${c.id}</h3>
-
-      <p><b>Customer:</b> ${c.name}</p>
-      <p><b>Mobile:</b> ${c.mobile}</p>
-
-      <button class="primary full"
-        onclick="viewCustomerFile('${c.id}')">
-        👁️ View Complete File
-      </button>
-      <button class="secondary full"
-        onclick="openEditCustomer('${c.id}')">
-        📤 Upload / Replace Photos & Documents
-      </button>
-
-    </div>
-  `).join('');
-
-  show('uploadedFiles');
-}
-
-
-function viewCustomerFile(fileNo){
-
-  const all = customerCache;
-
-  const c =
-    all.find(x => x.id === fileNo);
-
-  if(!c) return;
-
-  let html = `
-    <div class="card">
-
-      <h2>📁 ${c.id}</h2>
-
-      <h3>👤 Customer</h3>
-      <p><b>Name:</b> ${c.name}</p>
-      <p><b>Mobile:</b> ${c.mobile}</p>
-
-      <h3>📄 Documents</h3>
-
-      ${uploadedFileMarkup('🪪 Aadhaar Front',c.documents.aadhaar?.front)}
-      ${uploadedFileMarkup('🪪 Aadhaar Back',c.documents.aadhaar?.back)}
-      ${uploadedFileMarkup('💳 PAN',c.documents.pan)}
-      ${uploadedFileMarkup('🚘 DL Front',c.documents.dl?.front)}
-      ${uploadedFileMarkup('🚘 DL Back',c.documents.dl?.back)}
-      ${uploadedFileMarkup('⚡ Electricity Bill',c.documents.electricityBill)}
-      ${uploadedFileMarkup('🚗 RC Front',c.documents.rc?.front)}
-      ${uploadedFileMarkup('🚗 RC Back',c.documents.rc?.back)}
-      ${uploadedFileMarkup('📋 Fleet',c.documents.fleet)}
-      ${uploadedFileMarkup('📸 Photo',c.documents.photo)}
-
-      <hr>
-
-      <h3>👥 Co-Applicant</h3>
-      <p>${c.coApplicant.name || 'Not Added'}</p>
-      ${uploadedFileMarkup('🪪 Co-Applicant Aadhaar Front',c.coApplicant.aadhaar?.front)}
-      ${uploadedFileMarkup('🪪 Co-Applicant Aadhaar Back',c.coApplicant.aadhaar?.back)}
-      ${uploadedFileMarkup('💳 Co-Applicant PAN',c.coApplicant.pan)}
-      ${uploadedFileMarkup('⚡ Co-Applicant Electricity Bill',c.coApplicant.electricityBill)}
-      ${uploadedFileMarkup('🚗 Co-Applicant RC Front',c.coApplicant.rc?.front)}
-      ${uploadedFileMarkup('🚗 Co-Applicant RC Back',c.coApplicant.rc?.back)}
-      ${uploadedFileMarkup('📸 Co-Applicant Photo',c.coApplicant.rc?.photo)}
-
-      <h3>🤝 Guarantor</h3>
-      <p>${c.guarantor.name || 'Not Added'}</p>
-      ${uploadedFileMarkup('🪪 Guarantor Aadhaar Front',c.guarantor.aadhaar?.front)}
-      ${uploadedFileMarkup('🪪 Guarantor Aadhaar Back',c.guarantor.aadhaar?.back)}
-      ${uploadedFileMarkup('💳 Guarantor PAN',c.guarantor.pan)}
-      ${uploadedFileMarkup('🚗 Guarantor RC Front',c.guarantor.rc?.front)}
-      ${uploadedFileMarkup('🚗 Guarantor RC Back',c.guarantor.rc?.back)}
-      ${uploadedFileMarkup('📸 Guarantor Photo',c.guarantor.rc?.photo)}
-      ${uploadedFileMarkup('📋 Guarantor Fleet',c.guarantor.fleet)}
-
-      <button class="secondary full"
-        onclick="openAdminFiles()">
-        ← Back to Files
-      </button>
-
-    </div>
-  `;
-
-  document.getElementById('uploadedFilesList').innerHTML = html;
-  show('uploadedFiles');
-}
-
-async function restoreScreenAfterRefresh(){
- const screenId=sessionStorage.getItem('activeScreen');
- if(!screenId || !document.getElementById(screenId)) return;
- if(screenId==='employeeDash' && apiToken()) { await openDash(); return; }
- if(screenId==='employeeProfile' && apiToken()) { await openProfile(); return; }
- if(screenId==='adminDash' && apiToken()) { await loadEmployee(); show('adminDash'); return; }
- show(screenId);
-}
-
-restoreScreenAfterRefresh();
 </script>
 </body>
 </html>

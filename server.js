@@ -8,6 +8,13 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
+const upload = multer({ dest: 'uploads/' });
+
+
+
+
+
+
 
 const app = express();
 app.use(express.static(path.join(__dirname)));
@@ -19,9 +26,9 @@ const PORT = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === 'production';
 const JWT_SECRET = process.env.JWT_SECRET || (isProduction ? '' : 'local-development-only-change-me');
 const ADMIN_ID = process.env.ADMIN_ID || (isProduction ? '' : 'admin');
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || (isProduction ? '' : 'admin123');
-if (!JWT_SECRET || JWT_SECRET.length < 32 || !ADMIN_ID || !ADMIN_PASSWORD) {
-  throw new Error('JWT_SECRET, ADMIN_ID, and ADMIN_PASSWORD must be set. JWT_SECRET must be at least 32 characters.');
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH;
+if (!JWT_SECRET || JWT_SECRET.length < 32 || !ADMIN_ID || !ADMIN_PASSWORD_HASH) {
+  throw new Error('JWT_SECRET, ADMIN_ID, and ADMIN_PASSWORD_HASH must be set. JWT_SECRET must be at least 32 characters.');
 }
 const uploadsDir = path.join(__dirname, 'uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -75,6 +82,7 @@ const employeeSchema = new mongoose.Schema({
   aadhaarFile: { type: String, default: '' },
   aadhaarBackFile: { type: String, default: '' },
   profilePhoto: { type: String, default: '' },
+  documents: { type: mongoose.Schema.Types.Mixed, default: {} },
   canViewCustomerFiles: { type: Boolean, default: false }
 }, { timestamps: true });
 
@@ -102,7 +110,8 @@ const customerSchema = new mongoose.Schema({
   employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true },
   fileNumber: { type: String, required: true, trim: true },
   status: { type: String, enum: ['pending', 'confirmed'], default: 'pending' },
-  data: { type: mongoose.Schema.Types.Mixed, required: true }
+  data: { type: mongoose.Schema.Types.Mixed, required: true },
+  documents: { type: mongoose.Schema.Types.Mixed, default: {} }
 }, { timestamps: true });
 customerSchema.index({ employee: 1, fileNumber: 1 }, { unique: true });
 
@@ -117,7 +126,7 @@ function publicEmployee(employee) {
     mobile: employee.mobile, email: employee.email, status: employee.status,
     alternateMobile: employee.alternateMobile, address: employee.address,
     aadhaarFile: employee.aadhaarFile, aadhaarBackFile: employee.aadhaarBackFile, profilePhoto: employee.profilePhoto,
-    canViewCustomerFiles: employee.canViewCustomerFiles, createdAt: employee.createdAt
+    documents: employee.documents, canViewCustomerFiles: employee.canViewCustomerFiles, createdAt: employee.createdAt
   };
 }
 function signToken(employee) {
@@ -191,7 +200,7 @@ app.post('/api/auth/register', authRateLimit, async (req, res, next) => {
       return res.status(409).json({ message: 'An employee with this ID or email already exists.' });
     }
     const otp = createOtp();
-    const passwordHash = await bcrypt.hash(password, 12);
+    const passwordHash = await bcrypt.hash(password, 10);
     const otpHash = await bcrypt.hash(otp, 10);
     await PendingRegistration.findOneAndUpdate(
       { email: normalizedEmail },
@@ -281,7 +290,7 @@ app.post('/api/auth/reset-password', authRateLimit, async (req, res, next) => {
     if (grant.purpose !== 'password-reset') return res.status(401).json({ message: 'Invalid password-reset session.' });
     const employee = await Employee.findById(grant.sub);
     if (!employee || (employee.passwordResetVersion || 0) !== grant.version) return res.status(401).json({ message: 'Password-reset session is no longer valid. Request a new OTP.' });
-    employee.passwordHash = await bcrypt.hash(password, 12);
+    employee.passwordHash = await bcrypt.hash(password, 10);
     employee.passwordResetVersion = (employee.passwordResetVersion || 0) + 1;
     await employee.save();
     res.json({ message: 'Password reset successfully. You can now log in.' });
@@ -298,11 +307,41 @@ app.post('/api/auth/employee-login', authRateLimit, async (req, res, next) => {
 });
 
 app.post('/api/auth/admin-login', authRateLimit, async (req, res) => {
-  if (req.body.adminId !== ADMIN_ID || !(await bcrypt.compare(String(req.body.password || ''), ADMIN_PASSWORD))) return res.status(401).json({ message: 'Invalid admin ID or password.' });
+  const isPasswordMatch = await bcrypt.compare(req.body.password, process.env.ADMIN_PASSWORD_HASH);
+  if (req.body.adminId !== ADMIN_ID || !isPasswordMatch) {
+    return res.status(401).json({ message: 'Invalid admin ID or password.' });
+  }
   res.json({ token: jwt.sign({ role: 'admin' }, JWT_SECRET, { expiresIn: '8h', issuer: 'deeya-invest', audience: 'deeya-invest-ui' }) });
 });
 app.get('/api/admin/employees', requireAuth, requireAdmin, async (req, res, next) => {
   try { res.json((await Employee.find().sort({ createdAt: -1 })).map(publicEmployee)); } catch (error) { next(error); }
+});
+app.delete('/api/admin/employees/:id', requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) return res.status(404).json({ message: 'Employee profile not found.' });
+
+    const collectFiles = value => {
+      if (typeof value === 'string') return value.startsWith('/uploads/') ? [path.basename(value)] : [];
+      if (!value || typeof value !== 'object') return [];
+      return Object.values(value).flatMap(collectFiles);
+    };
+    const files = collectFiles({
+      profilePhoto: employee.profilePhoto,
+      aadhaarFile: employee.aadhaarFile,
+      aadhaarBackFile: employee.aadhaarBackFile,
+      documents: employee.documents
+    });
+    await Promise.all([...new Set(files)].map(filename => fs.promises.unlink(path.join(uploadsDir, filename)).catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+    })));
+    await Promise.all([
+      PendingRegistration.deleteMany({ $or: [{ employeeId: employee.employeeId }, { email: employee.email }] }),
+      PasswordReset.deleteMany({ employee: employee._id })
+    ]);
+    await employee.deleteOne();
+    res.json({ message: 'Employee profile deleted. The employee can register again.', id: employee._id });
+  } catch (error) { next(error); }
 });
 app.get('/api/admin/customers', requireAuth, requireAdmin, async (req, res, next) => {
   try {
@@ -311,6 +350,7 @@ app.get('/api/admin/customers', requireAuth, requireAdmin, async (req, res, next
       customerId: customer._id,
       ...customer.data,
       status: customer.status || 'pending',
+      documents: { ...(customer.data?.documents || {}), ...(customer.documents || {}) },
       createdAt: customer.createdAt,
       uploadedBy: customer.employee ? {
         name: customer.employee.name,
@@ -350,12 +390,69 @@ app.patch('/api/admin/employees/:id/status', requireAuth, requireAdmin, async (r
     res.json({ employee: publicEmployee(employee) });
   } catch (error) { next(error); }
 });
+
+
+
+
+
+
+app.get('/api/employee/profile', requireAuth, requireEmployee, async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.auth.sub);
+    if (!employee) return res.status(404).json({ message: 'Employee not found.' });
+    res.json(publicEmployee(employee));
+  } catch (error) { next(error); }
+});
+
 app.patch('/api/admin/employees/:id/customer-access', requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const employee = await Employee.findByIdAndUpdate(req.params.id, { canViewCustomerFiles: Boolean(req.body.canViewCustomerFiles) }, { new: true });
     if (!employee) return res.status(404).json({ message: 'Employee not found.' });
     res.json({ employee: publicEmployee(employee) });
   } catch (error) { next(error); }
+});
+
+app.post('/api/admin/employees/:id/documents', requireAuth, requireAdmin, upload.single('document'), async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) return res.status(404).json({ message: 'Employee not found.' });
+    const { originalname, path: filePath } = req.file;
+    const documentPath = `/uploads/${path.basename(filePath)}`;
+    employee.documents[originalname] = documentPath;
+    await employee.save();
+    res.json({ message: 'Document uploaded successfully.', employee: publicEmployee(employee) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/admin/employees/:id/documents/:filename', requireAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) return res.status(404).json({ message: 'Employee not found.' });
+    const { filename } = req.params;
+    const documentPath = `/uploads/${filename}`;
+    let originalname;
+    for (const key in employee.documents) {
+      if (employee.documents[key] === documentPath) {
+        originalname = key;
+        break;
+      }
+    }
+    if (!originalname) {
+      return res.status(404).json({ message: 'Document not found.' });
+    }
+    delete employee.documents[originalname];
+    await employee.save();
+    fs.unlink(path.join(uploadsDir, filename), (err) => {
+      if (err) {
+        console.error('Error deleting file:', err);
+      }
+    });
+    res.json({ message: 'Document deleted successfully.', employee: publicEmployee(employee) });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/employees/me', requireAuth, requireEmployee, async (req, res, next) => {
@@ -365,14 +462,12 @@ app.get('/api/employees/me', requireAuth, requireEmployee, async (req, res, next
     res.json({ employee: publicEmployee(employee) });
   } catch (error) { next(error); }
 });
-const storage = multer.diskStorage({ destination: uploadsDir, filename: (req, file, cb) => cb(null, `${Date.now()}-${crypto.randomUUID()}${path.extname(file.originalname)}`) });
-const allowedExtensions = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.mp4', '.mov', '.avi']);
-const allowedUploadType = file => allowedExtensions.has(path.extname(file.originalname).toLowerCase()) && (file.mimetype.startsWith('image/') || [
-  'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'video/mp4', 'video/quicktime', 'video/x-msvideo'
-].includes(file.mimetype));
-const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024, files: 30, fields: 50, fieldSize: 100000 }, fileFilter: (req, file, cb) => allowedUploadType(file) ? cb(null, true) : cb(new Error('Allowed files: photos, PDF, Word, Excel, and common video formats.')) });
+
+
+
+
+
+
 app.patch('/api/employees/me', requireAuth, requireEmployee, upload.fields([{ name: 'aadhaar', maxCount: 1 }, { name: 'aadhaarBack', maxCount: 1 }, { name: 'profilePhoto', maxCount: 1 }]), async (req, res, next) => {
   try {
     const { alternateMobile = '', address = '' } = req.body;
@@ -464,10 +559,10 @@ app.patch('/api/customers/:id', requireAuth, requireEmployee, upload.fields(cust
 app.get('/api/customers', requireAuth, requireEmployee, async (req, res, next) => {
   try {
     const employee = await Employee.findById(req.auth.sub).select('canViewCustomerFiles');
-    const query = employee?.canViewCustomerFiles ? {} : { employee: req.auth.sub };
+    const query = req.query.mine === 'true' || !employee?.canViewCustomerFiles ? { employee: req.auth.sub } : {};
     const customers = await Customer.find(query).populate('employee', 'name employeeId email').sort({ createdAt: -1 });
     res.json(customers.map(c => ({
-      id: c._id, ...c.data, status: c.status || 'pending', createdAt: c.createdAt,
+      ...c.data, recordId: c._id.toString(), status: c.status || 'pending', createdAt: c.createdAt,
       uploadedBy: c.employee ? { name: c.employee.name, employeeId: c.employee.employeeId, email: c.employee.email } : null
     })));
   } catch (error) { next(error); }
@@ -485,8 +580,10 @@ app.get('/api/customers/stats', requireAuth, requireEmployee, async (req, res, n
 
 app.use((error, req, res, next) => { console.error(error); res.status(error.status || 500).json({ message: error.message || 'Something went wrong.' }); });
 
-const mongodbUri = process.env.MONGODB_URI?.trim();
-if (!mongodbUri) throw new Error('MONGODB_URI must be set in the environment.');
+const mongodbUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/deeya-invest';
+if (isProduction && !process.env.MONGODB_URI) {
+  throw new Error('MONGODB_URI must be set in the environment for production.');
+}
 if (!/^mongodb(?:\+srv)?:\/\//.test(mongodbUri)) {
   throw new Error('MONGODB_URI must start with mongodb:// or mongodb+srv://. Copy the complete URI from MongoDB Atlas or use mongodb://127.0.0.1:27017/deeya-invest for a local MongoDB server.');
 }
@@ -496,14 +593,15 @@ if (/[<>]/.test(mongodbUri) || /@<cluster>|<username>|<password>|<database>/.tes
 mongoose.connect(mongodbUri, { serverSelectionTimeoutMS: 10000, maxPoolSize: 10, family: 4 })
   .then(() => {
     console.log('MongoDB connected successfully.');
-    const server = app.listen(PORT, () => console.log(`Deeya Invest running at http://localhost:${PORT}`));
-    server.on('error', error => {
-      if (error.code === 'EADDRINUSE') {
-        console.error(`Port ${PORT} is already in use. The app may already be running at http://localhost:${PORT}.`);
-        return process.exitCode = 1;
-      }
-      console.error('Server failed to start:', error.message);
-      process.exitCode = 1;
-    });
   })
-  .catch(error => { console.error('MongoDB connection failed:', error.message); process.exit(1); });
+  .catch(error => { console.error('MongoDB connection failed:', error.message); });
+
+const server = app.listen(PORT, () => console.log(`Deeya Invest running at http://localhost:${PORT}`));
+server.on('error', error => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use. The app may already be running at http://localhost:${PORT}.`);
+    return process.exitCode = 1;
+  }
+  console.error('Server failed to start:', error.message);
+  process.exitCode = 1;
+});
